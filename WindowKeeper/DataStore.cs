@@ -22,6 +22,8 @@ internal sealed class WindowRecord
     public string ProcessName { get; set; } = "";
     public string ClassName { get; set; } = "";
     public string Title { get; set; } = "";
+    /// <summary>Browser windows: titles of the open tabs (identifies the window better than its title).</summary>
+    public List<string> Tabs { get; set; } = new();
 
     /// <summary>Monitor the window was on; position is relative to that monitor's top-left corner.</summary>
     public string MonitorId { get; set; } = "";

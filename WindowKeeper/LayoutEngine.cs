@@ -14,6 +14,7 @@ internal sealed class LayoutEngine
 {
     private static readonly TimeSpan SettleTime = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan NewWindowDelay = TimeSpan.FromSeconds(1.5);
+    private static readonly TimeSpan BrowserTabWait = TimeSpan.FromSeconds(10);
 
     private readonly DataStore _data;
     private readonly VirtualDesktops _vd;
@@ -28,23 +29,27 @@ internal sealed class LayoutEngine
     private string? _settlingKey;
     private DateTime _stableSince;
 
+    /// <summary>Only windows passing this filter are saved or restored (used for testing).</summary>
+    private readonly Func<LiveWindow, bool> _scope;
+
     public event Action<string>? Notify;
 
-    public LayoutEngine(DataStore data, VirtualDesktops vd)
+    public LayoutEngine(DataStore data, VirtualDesktops vd, Func<LiveWindow, bool>? scope = null)
     {
         _data = data;
         _vd = vd;
+        _scope = scope ?? (_ => true);
     }
 
     public Settings Settings => _data.Settings;
 
     // ------------------------------------------------------------------ save
 
-    public SaveResult SaveCurrent(Func<LiveWindow, bool>? filter = null)
+    public SaveResult SaveCurrent()
     {
         var layout = MonitorLayout.Current();
         var desktops = VirtualDesktops.ListDesktopIds();
-        var windows = WindowEnumerator.GetWindows(_vd).Where(filter ?? (_ => true)).ToList();
+        var windows = WindowEnumerator.GetWindows(_vd).Where(_scope).ToList();
 
         var snapshot = new LayoutSnapshot
         {
@@ -107,6 +112,7 @@ internal sealed class LayoutEngine
             ProcessName = w.ProcessName,
             ClassName = w.ClassName,
             Title = w.Title,
+            Tabs = new List<string>(w.Tabs),
             MonitorId = mon.Id,
             MonitorWidth = mon.Bounds.Width,
             MonitorHeight = mon.Bounds.Height,
@@ -123,40 +129,45 @@ internal sealed class LayoutEngine
 
     // ------------------------------------------------------------------ restore
 
-    public RestoreResult RestoreAll(string reason, Func<LiveWindow, bool>? filter = null)
+    public RestoreResult RestoreAll(string reason)
     {
         var layout = MonitorLayout.Current();
         bool hasExact = _data.Layouts.Layouts.ContainsKey(layout.Key);
-        var windows = WindowEnumerator.GetWindows(_vd).Where(filter ?? (_ => true)).ToList();
+        var windows = WindowEnumerator.GetWindows(_vd).Where(_scope).ToList();
         var candidates = BuildCandidates(layout);
 
         // Greedy best-first assignment: every window gets at most one record and vice versa.
         var pairs = new List<(LiveWindow w, Candidate c, int score)>();
         foreach (var w in windows)
+        {
+            Guid liveDesktop = _vd.GetDesktopId(w.Handle);
             foreach (var c in candidates)
             {
-                int s = Score(w, c);
+                int s = Score(w, liveDesktop, c);
                 if (s >= 0) pairs.Add((w, c, s));
             }
+        }
 
         var usedWindows = new HashSet<IntPtr>();
         var usedRecords = new HashSet<Guid>();
-        var matches = new List<(LiveWindow w, Candidate c)>();
+        var matches = new List<(LiveWindow w, Candidate c, int score)>();
         foreach (var p in pairs.OrderByDescending(p => p.score))
         {
             if (usedWindows.Contains(p.w.Handle) || usedRecords.Contains(p.c.Record.Id)) continue;
             usedWindows.Add(p.w.Handle);
             usedRecords.Add(p.c.Record.Id);
-            matches.Add((p.w, p.c));
+            matches.Add(p);
         }
 
         IntPtr foreground = Native.GetForegroundWindow();
         int moved = 0;
-        foreach (var (w, c) in matches)
+        foreach (var (w, c, score) in matches)
         {
             _assigned[w.Handle] = c.Record.Id;
             _known.Add(w.Handle);
-            if (Apply(w, c.Record, layout)) moved++;
+            bool changed = Apply(w, c.Record, layout);
+            if (changed) moved++;
+            Log.Write($"  {w} -> saved \"{c.Record.Title}\" (desktop {c.Record.DesktopIndex + 1}, score {score}){(changed ? " moved" : "")}");
         }
         if (moved > 0 && foreground != IntPtr.Zero && Native.GetForegroundWindow() != foreground)
             Native.SetForegroundWindow(foreground);
@@ -166,24 +177,32 @@ internal sealed class LayoutEngine
         return new RestoreResult(matches.Count, moved, layout.Description, hasExact);
     }
 
-    private void RestoreSingle(IntPtr h)
+    /// <summary>Places one newly opened window. Returns false if it should be tried again later.</summary>
+    private bool RestoreSingle(IntPtr h, TimeSpan age)
     {
         var w = WindowEnumerator.Describe(h);
-        if (w == null) return;
+        if (w == null || !_scope(w)) return true;
+        // A browser restoring its session may not have its tab strip filled yet; without the tabs we
+        // cannot tell its windows apart, so wait a little (but not forever).
+        if (TabReader.IsBrowser(w) && w.Tabs.Count == 0 && age < BrowserTabWait) return false;
+
         var layout = MonitorLayout.Current();
         var taken = _assigned.Values.ToHashSet();
+        Guid liveDesktop = _vd.GetDesktopId(h);
         var best = BuildCandidates(layout)
             .Where(c => !taken.Contains(c.Record.Id))
-            .Select(c => (c, score: Score(w, c)))
+            .Select(c => (c, score: Score(w, liveDesktop, c)))
             .Where(x => x.score >= 0)
             .OrderByDescending(x => x.score)
             .FirstOrDefault();
-        if (best.c == null) return;
+        if (best.c == null) return true;
 
         _assigned[h] = best.c.Record.Id;
         bool moved = Apply(w, best.c.Record, layout);
-        Log.Write($"New window {w}: {(moved ? "restored" : "already in place")}" +
-                  (best.c.Exact ? "" : $" (from layout [{best.c.Snapshot.Description}])"));
+        Log.Write($"New window {w}: {(moved ? "restored" : "already in place")} as saved \"{best.c.Record.Title}\" " +
+                  $"(desktop {best.c.Record.DesktopIndex + 1}, score {best.score})" +
+                  (best.c.Exact ? "" : $" from layout [{best.c.Snapshot.Description}]"));
+        return true;
     }
 
     private sealed record Candidate(WindowRecord Record, LayoutSnapshot Snapshot, bool Exact, int Rank);
@@ -215,7 +234,11 @@ internal sealed class LayoutEngine
         return list;
     }
 
-    private static int Score(LiveWindow w, Candidate c)
+    /// <summary>
+    /// How well an open window fits a saved record (-1: not the same app). Process and window class must
+    /// match. Browser windows are told apart by their tabs, because their title only shows the active tab.
+    /// </summary>
+    private static int Score(LiveWindow w, Guid liveDesktop, Candidate c)
     {
         var r = c.Record;
         if (!string.Equals(w.ProcessName, r.ProcessName, StringComparison.OrdinalIgnoreCase)) return -1;
@@ -225,8 +248,13 @@ internal sealed class LayoutEngine
         if (w.ClassName == "ApplicationFrameWindow" && !sameTitle) return -1;
 
         int score = c.Exact ? 1000 : Math.Max(100, 500 - c.Rank * 10);
-        if (sameTitle) score += 200;
+        bool browser = TabReader.IsBrowser(w);
+        if (browser && r.Tabs.Count > 0 && w.Tabs.Count > 0)
+            score += (int)Math.Round(TabReader.Similarity(w.Tabs, r.Tabs) * 400);
+        if (sameTitle) score += browser ? 50 : 200;
         if (string.Equals(w.ProcessPath, r.ProcessPath, StringComparison.OrdinalIgnoreCase)) score += 50;
+        // Tie-breaker: a window already on the saved desktop is probably the saved one.
+        if (liveDesktop != Guid.Empty && liveDesktop == r.DesktopId) score += 30;
         return score;
     }
 
@@ -416,9 +444,10 @@ internal sealed class LayoutEngine
 
         foreach (var (h, seen) in _pending.ToList())
         {
-            if (now - seen < NewWindowDelay) continue;
-            _pending.Remove(h);
-            if (Native.IsWindow(h) && Native.IsWindowVisible(h)) RestoreSingle(h);
+            var age = now - seen;
+            if (age < NewWindowDelay) continue;
+            if (!Native.IsWindow(h) || !Native.IsWindowVisible(h) || RestoreSingle(h, age))
+                _pending.Remove(h);
         }
     }
 

@@ -14,6 +14,11 @@ internal sealed class LiveWindow
     public string Title { get; init; } = "";
     public bool IsToolWindow { get; init; }
 
+    private List<string>? _tabs;
+
+    /// <summary>Tab titles for browser windows (read once, on first use); empty for other windows.</summary>
+    public List<string> Tabs => _tabs ??= TabReader.IsBrowser(this) ? TabReader.ReadTabs(Handle) : new List<string>();
+
     public override string ToString() => $"[{ProcessName}] \"{Title}\" ({ClassName})";
 }
 

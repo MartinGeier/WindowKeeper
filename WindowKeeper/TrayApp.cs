@@ -14,11 +14,11 @@ internal sealed class TrayApp : ApplicationContext
     private readonly ContextMenuStrip _menu = new();
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 1000 };
 
-    public TrayApp(DataStore data, VirtualDesktops vd)
+    public TrayApp(DataStore data, VirtualDesktops vd, Func<LiveWindow, bool>? scope = null)
     {
         _data = data;
         _vd = vd;
-        _engine = new LayoutEngine(data, vd);
+        _engine = new LayoutEngine(data, vd, scope);
         _engine.Notify += msg => ShowBalloon(msg);
 
         _menu.Opening += (_, _) => BuildMenu();

@@ -30,7 +30,14 @@ configuration.
   `.bak` copy is kept. Turn on **Start with Windows** in the menu.
 
 Windows are recognized by process (exe), window class and title. If an app has several windows,
-the one with the same title gets its own place first. A window is never minimized or un-minimized by a
+the one with the same title gets its own place first.
+
+**Browser windows** (Edge, Chrome, Brave, Vivaldi, Opera, Firefox, ...) are recognized by their **open
+tabs**, because their title only shows the active tab and changes all the time. WindowKeeper reads the tab
+titles through UI Automation when you save. When restoring, it gives each browser window the saved place
+whose tabs are most alike. So two browser windows on two desktops each go back to their own desktop,
+also after a reboot when the browser restores its session. A browser window that just opened gets up to
+10 seconds to fill its tab strip before it is placed. A window is never minimized or un-minimized by a
 restore. A minimized window only gets its "restore to" position fixed.
 
 ## Build and run
@@ -55,10 +62,10 @@ dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile
 
 | Option | What it does |
 | --- | --- |
-| `--diag` | Lists monitors, layout key, virtual desktops and all tracked windows |
+| `--diag` | Lists monitors, layout key, virtual desktops and all tracked windows (with browser tabs) |
 | `--save` | Saves the layout for the current monitors and exits |
 | `--restore` | Restores the layout for the current monitors and exits |
-| `--only <text>` | With `--save`/`--restore`: only windows whose process or title contains the text |
+| `--only <text>` | Only handle windows whose process or title contains the text (also in tray mode, for testing) |
 | `--data <folder>` | Uses another data folder |
 
 Output goes to stdout. Because this is a GUI exe, redirect it, for example
