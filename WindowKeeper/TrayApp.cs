@@ -13,6 +13,8 @@ internal sealed class TrayApp : ApplicationContext
     private readonly NotifyIcon _icon;
     private readonly ContextMenuStrip _menu = new();
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 1000 };
+    private readonly Hotkeys _hotkeys = new();
+    private string? _saveHotkey, _restoreHotkey;   // shortcut text if registered
 
     public TrayApp(DataStore data, VirtualDesktops vd, Func<LiveWindow, bool>? scope = null)
     {
@@ -49,7 +51,27 @@ internal sealed class TrayApp : ApplicationContext
             catch (Exception ex) { Log.Write("Tick failed: " + ex); }
         };
         _timer.Start();
+        RegisterHotkeys();
         Log.Write("WindowKeeper started. " + vd.Status);
+    }
+
+    private void RegisterHotkeys()
+    {
+        var problems = new List<string>();
+        _saveHotkey = Register(_data.Settings.SaveHotkey, Save);
+        _restoreHotkey = Register(_data.Settings.RestoreHotkey, () => Restore("shortcut"));
+        if (problems.Count > 0)
+            ShowBalloon("Shortcut not available: " + string.Join("; ", problems));
+
+        string? Register(string combination, Action action)
+        {
+            if (string.IsNullOrWhiteSpace(combination)) return null;
+            string? error = _hotkeys.Register(combination, action);
+            if (error == null) return combination;
+            problems.Add(error);
+            Log.Write("Shortcut not registered: " + error);
+            return null;
+        }
     }
 
     private void OnDisplaySettingsChanged(object? s, EventArgs e) => _engine.DisplayChanged("display settings changed");
@@ -81,9 +103,13 @@ internal sealed class TrayApp : ApplicationContext
         var save = new ToolStripMenuItem("Save window layout for these monitors", null, (_, _) => Save())
         {
             Font = new Font(_menu.Font, FontStyle.Bold),
+            ShortcutKeyDisplayString = _saveHotkey,
         };
         _menu.Items.Add(save);
-        _menu.Items.Add(new ToolStripMenuItem("Restore saved layout now", null, (_, _) => Restore()));
+        _menu.Items.Add(new ToolStripMenuItem("Restore saved layout now", null, (_, _) => Restore("menu"))
+        {
+            ShortcutKeyDisplayString = _restoreHotkey,
+        });
 
         var layouts = new ToolStripMenuItem("Saved layouts");
         foreach (var snap in _data.Layouts.Layouts.Values.OrderByDescending(s => s.SavedAt))
@@ -160,11 +186,11 @@ internal sealed class TrayApp : ApplicationContext
         }
     }
 
-    private void Restore()
+    private void Restore(string reason)
     {
         try
         {
-            var r = _engine.RestoreAll("menu");
+            var r = _engine.RestoreAll(reason);
             ShowBalloon(r.HasSavedLayout || r.Matched > 0
                 ? $"Restored {r.Moved} window(s) ({r.Matched} recognized)"
                 : $"Nothing saved for {r.LayoutDescription} yet");
@@ -210,6 +236,7 @@ internal sealed class TrayApp : ApplicationContext
     protected override void ExitThreadCore()
     {
         _timer.Stop();
+        _hotkeys.Dispose();
         SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
         SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         SystemEvents.SessionSwitch -= OnSessionSwitch;

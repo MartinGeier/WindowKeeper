@@ -6,7 +6,8 @@ configuration.
 
 ## How it works
 
-- **Saving only happens when you ask.** In the tray menu, choose **Save window layout for these monitors**.
+- **Saving only happens when you ask.** In the tray menu, choose **Save window layout for these monitors**,
+  or press **Ctrl+Alt+Shift+S** anywhere (**Ctrl+Alt+Shift+R** restores).
   WindowKeeper saves every open application window for the monitors connected right now, replacing what
   was saved before for that monitor setup.
 - **One layout per monitor configuration.** A configuration is the set of connected physical monitors
@@ -39,6 +40,24 @@ whose tabs are most alike. So two browser windows on two desktops each go back t
 also after a reboot when the browser restores its session. A browser window that just opened gets up to
 10 seconds to fill its tab strip before it is placed. A window is never minimized or un-minimized by a
 restore. A minimized window only gets its "restore to" position fixed.
+
+## Keyboard shortcuts
+
+The shortcuts are system-wide and work in every app. While WindowKeeper runs, no other app receives
+them. Change them in `settings.json` in the data folder, then restart WindowKeeper:
+
+```json
+"SaveHotkey": "Ctrl+Alt+Shift+S",
+"RestoreHotkey": "Ctrl+Alt+Shift+R"
+```
+
+Use `Ctrl`, `Alt`, `Shift`, `Win` plus a key name (`A`-`Z`, `0`-`9`, `F1`-`F24`, `Home`, ...). An empty
+value turns the shortcut off. If another program has already registered a combination, WindowKeeper
+shows a notification and writes it to the log.
+
+Ctrl+Shift+S and Ctrl+Shift+R are not the default on purpose. Many apps use them ("Save As" in VS Code,
+Visual Studio and Notepad++; "reload without cache" in all browsers). A global shortcut would take
+them away from those apps.
 
 ## Build and run
 

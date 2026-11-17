@@ -65,6 +65,11 @@ internal sealed class Settings
     public bool RestoreOnDisplayChange { get; set; } = true;
     public bool RestoreNewWindows { get; set; } = true;
     public bool RestoreVirtualDesktops { get; set; } = true;
+
+    /// <summary>Global shortcut to save the layout, e.g. "Ctrl+Alt+Shift+S". Empty = no shortcut.</summary>
+    public string SaveHotkey { get; set; } = "Ctrl+Alt+Shift+S";
+    /// <summary>Global shortcut to restore the layout. Empty = no shortcut.</summary>
+    public string RestoreHotkey { get; set; } = "Ctrl+Alt+Shift+R";
 }
 
 /// <summary>Loads and saves layouts.json and settings.json in the data folder.</summary>
